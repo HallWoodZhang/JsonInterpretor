@@ -8,3 +8,4 @@ ans/*
 *.a
 CMakeFiles/*
 *.cmake
+Makefile

@@ -2,3 +2,5 @@ build/*
 ans/*
 */build/*
 */ans/*
+*.o
+*.out

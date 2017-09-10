@@ -4,3 +4,7 @@ ans/*
 */ans/*
 *.o
 *.out
+*_test
+*.a
+CMakeFiles/*
+*.cmake

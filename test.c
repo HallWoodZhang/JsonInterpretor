@@ -17,7 +17,7 @@ static int test_pass = 0;
             main_ret = 1;\
         }\
     } while(0)
-
+    
 #define EXPECT_EQ_INT(expect, actual) EXPECT_EQ_BASE((expect) == (actual), expect, actual, "%d")
 
 static void test_parse_null() {

@@ -34,7 +34,7 @@ static void* lept_context_push(lept_context* c, size_t size) {
             c->size += c->size >> 1;  /* c->size * 1.5 */
         c->stack = (char*)realloc(c->stack, c->size);
     }
-    ret = c->stack + c->size;
+    ret = c->stack + c->top;
     c->top += size;
     return ret;
 }
@@ -145,7 +145,14 @@ static int lept_parse_string(lept_context* c, lept_value* v) {
         switch (ch) {
             case '\"':
                 len = c->top - head;
+#ifdef x
+                const char* tmp = (const char*)lept_context_pop(c, len);
+                printf("testcode: %s\n", tmp);
+                lept_set_string(v, tmp, len);
+#endif
+#ifndef x
                 lept_set_string(v, (const char*)lept_context_pop(c, len), len);
+#endif
                 c->json = p;
                 return LEPT_PARSE_OK;
             case '\\':

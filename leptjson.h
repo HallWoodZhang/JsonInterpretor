@@ -5,6 +5,7 @@ typedef enum { LEPT_NULL, LEPT_FALSE, LEPT_TRUE, LEPT_NUMBER, LEPT_STRING, \
     LEPT_ARRA} lept_type;
 
 typedef struct {
+    double    n;
     lept_type type;
 } lept_value;
 

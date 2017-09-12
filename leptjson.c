@@ -134,9 +134,70 @@ static int lept_parse_number(lept_context* c, lept_value* v) {
     return LEPT_PARSE_OK;
 }
 
+/* transcode */
+static const char* lept_parse_hex4(const char* p, unsigned* u) {
+    int i;
+    *u = 0;
+    for (i = 0; i < 4; i++) {
+        char ch = *p++;
+        *u <<= 4;
+        if      (ch >= '0' && ch <= '9')  *u |= ch - '0';
+        else if (ch >= 'A' && ch <= 'F')  *u |= ch - ('A' - 10);
+        else if (ch >= 'a' && ch <= 'f')  *u |= ch - ('a' - 10);
+        else return NULL;
+    }
+    return p;
+}
+
+static lept_encode_utf8(lept_context* c, unsigned u) {
+    /*
+    UTF-8是一种变长字节编码方式。对于某一个字符的UTF-8编码，如果只有一个字节则其最高二进制位为0；
+    如果是多字节，其第一个字节从最高位开始，连续的二进制位值为1的个数决定了其编码的位数，其余各字节均以10开头。
+    UTF-8最多可用到6个字节。
+    如表：
+    1字节 0xxxxxxx 兼容ASCII
+    2字节 110xxxxx 10xxxxxx
+    3字节 1110xxxx 10xxxxxx 10xxxxxx
+    4字节 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
+    5字节 111110xx 10xxxxxx 10xxxxxx 10xxxxxx 10xxxxxx
+    6字节 1111110x 10xxxxxx 10xxxxxx 10xxxxxx 10xxxxxx 10xxxxxx
+    因此UTF-8中可以用来表示字符编码的实际位数最多有31位，即上表中x所表示的位。除去那些控制位（每字节开头的10等），
+    这些x表示的位与UNICODE编码是一一对应的，位高低顺序也相同。
+    实际将UNICODE转换为UTF-8编码时应先去除高位0，然后根据所剩编码的位数决定所需最小的UTF-8编码位数。
+    因此那些基本ASCII字符集中的字符（UNICODE兼容ASCII）只需要一个字节的UTF-8编码（7个二进制位）便可以表示。
+
+    from http://www.cnblogs.com/xinruzhishui/p/5763894.html
+
+    所以在这个函数中, 我们最多考虑四个字节
+    */
+
+    /* 1 byte 0xxxxxxx */
+    if (u <= 0x7F)
+        PUTC(c, u & 0xFF); /* push to stack of lept_context */
+    else if (u <= 0x7FF) {
+        PUTC(c, 0xC0 | ((u >> 6) & 0xFF)); /* 0xC0 = 11000000 */
+        PUTC(c, 0x80 | ( u       & 0x3F));
+    }
+    else if (u <= 0xFFFF) {
+        PUTC(c, 0xE0 | ((u >> 12) & 0xFF)); /* 0xE0 = 11100000 */
+        PUTC(c, 0x80 | ((u >>  6) & 0x3F)); /* 0x80 = 10000000 */
+        PUTC(c, 0x80 | ( u        & 0x3F)); /* 0x3F = 00111111 */
+    }
+    else {
+        assert(u <= 0x10FFFF);
+        PUTC(c, 0xF0 | ((u >> 18) & 0xFF));
+        PUTC(c, 0x80 | ((u >> 12) & 0x3F));
+        PUTC(c, 0x80 | ((u >>  6) & 0x3F));
+        PUTC(c, 0x80 | ( u        & 0x3F));
+    }
+}
+
+#define STRING_ERROR(ret) do { c->top = head; return ret; } while(0)
+
 static int lept_parse_string(lept_context* c, lept_value* v) {
     size_t head = c->top;
     size_t len;
+    unsigned u, u2;
     const char* p;
     EXPECT(c, '\"');
     p = c->json;
@@ -145,14 +206,7 @@ static int lept_parse_string(lept_context* c, lept_value* v) {
         switch (ch) {
             case '\"':
                 len = c->top - head;
-#ifdef x
-                const char* tmp = (const char*)lept_context_pop(c, len);
-                printf("testcode: %s\n", tmp);
-                lept_set_string(v, tmp, len);
-#endif
-#ifndef x
                 lept_set_string(v, (const char*)lept_context_pop(c, len), len);
-#endif
                 c->json = p;
                 return LEPT_PARSE_OK;
             case '\\':
@@ -165,9 +219,25 @@ static int lept_parse_string(lept_context* c, lept_value* v) {
                     case 'n':  PUTC(c, '\n'); break;
                     case 'r':  PUTC(c, '\r'); break;
                     case 't':  PUTC(c, '\t'); break;
+                    case 'u':
+                        if (!(p = lept_parse_hex4(p, &u)))
+                            STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_HEX);
+                        /* codepoint = 0x10000 + (H − 0xD800) × 0x400 + (L − 0xDC00) */
+                        if (u >= 0xD800 && u <= 0xDBFF) { /* surrogate pair */
+                            if (*p++ != '\\')
+                                STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_SURROGATE);
+                            if (*p++ != 'u')
+                                STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_SURROGATE);
+                            if (!(p = lept_parse_hex4(p, &u2)))
+                                STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_HEX);
+                            if (u2 < 0xDC00 || u2 > 0xDFFF)
+                                STRING_ERROR(LEPT_PARSE_INVALID_UNICODE_SURROGATE);
+                            u = (((u - 0xD800) << 10) | (u2 - 0xDC00)) + 0x10000;
+                        }
+                        lept_encode_utf8(c, u);
+                        break;
                     default:
-                        c->top = head;
-                        return LEPT_PARSE_INVALID_STRING_ESCAPE;
+                        STRING_ERROR(LEPT_PARSE_INVALID_STRING_ESCAPE);
                 }
                 break;
 
@@ -177,14 +247,11 @@ static int lept_parse_string(lept_context* c, lept_value* v) {
                   说明到达C程序后期加上的标记了还没有扫描到json字符串的结尾
                   所以我们认为它这个字符串缺失了一些东西
                 */
-                c->top = head;
-                return LEPT_PARSE_MISS_QUOTATION_MARK;
+                STRING_ERROR(LEPT_PARSE_MISS_QUOTATION_MARK);
             default:
                 /* 当中空缺的 %x22 是双引号，%x5C 是反斜线，都已经处理。所以不合法的字符是 %x00 至 %x1F。我们简单地在 default 里处理：*/
-                if ((unsigned char) ch < 0x20) {
-                    c->top = head;
-                    return LEPT_PARSE_INVALID_STRING_CHAR;
-                }
+                if ((unsigned char) ch < 0x20)
+                    STRING_ERROR(LEPT_PARSE_INVALID_STRING_CHAR);
                 PUTC(c, ch);
         }
     }
@@ -288,4 +355,3 @@ void lept_set_number(lept_value* v, double n) {
     v->u.n = n;
     v->type = LEPT_NUMBER;
 }
-
